@@ -1,22 +1,14 @@
-#!/usr/bin/env bash 
-set -eu
+#!/usr/bin/env bash
+set -e
 
 # begin configuration
+# change user and group to your 
 
-# domain_subdomains syntax: 2 avaialble
-# 1: domain subdomain1 subdomain2 ...
-# 2: subdomain.domain
-
-domain_subdomains=( \
-"nerdz.eu w ww www mobile static" \
-"example.com sub" \
-"otherwebsite.net sub1 sub2" \
-"domain.duckdns.org" \
-)
-email=nessuno@nerdz.eu
-w_root=/home/nessuno/
-user=nessuno
-group=nessuno
+domains=( domain.tld www.domain.tld )
+email=user@domain.tld
+w_root=/home/user
+user=user
+group=user
 
 # end configuration
 
@@ -25,36 +17,12 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-for domain_set_string in "${domain_subdomains[@]}"; do
-    domain_set=(${domain_set_string// / })
-    domain=${domain_set[0]}
-    unset domain_set[0]
 
-    all_subdomains="-d $domain"
-    if [ ${#domain_set[@]} -gt 0 ]; then
-        for sub_domain in "${domain_set[@]}"; do
-            all_subdomains="$all_subdomains -d $sub_domain.$domain"
-        done
-    fi
-
-    /usr/bin/certbot certonly --agree-tos --renew-by-default \
-        --rsa-key-size 4096 --email $email --webroot -w $w_root$domain \
-        $all_subdomains
-    cat /etc/letsencrypt/live/$domain/privkey.pem \
-        /etc/letsencrypt/live/$domain/cert.pem \
-        > /etc/lighttpd/$domain.pem
-    cp /etc/letsencrypt/live/$domain/fullchain.pem \
-       /etc/lighttpd/
-    chown -R $user:$group /etc/lighttpd/
-    chmod 600 /etc/lighttpd/*.pem
+for domain in "${domains[@]}"; do
+    /usr/bin/certbot certonly --agree-tos --renew-by-default --dns-cloudflare --dns-cloudflare-credentials /home/$user/.secrets/cloudflare.ini --email $email -d $domain
+    cat /etc/letsencrypt/live/$domain/privkey.pem  /etc/letsencrypt/live/$domain/cert.pem > ssl.pem
+    cp ssl.pem /etc/nginx/ssl/$domain.pem
+    cp /etc/letsencrypt/live/$domain/fullchain.pem /etc/nginx/ssl/
+    chown -R $user:$group /etc/nginx/
+    rm ssl.pem
 done
-
-if pgrep -x "lighttpd" > /dev/null
-then
-    systemctl restart lighttpd
-fi
-
-if pgrep -x "nginx" > /dev/null
-then
-    systemctl restart nginx
-fi
