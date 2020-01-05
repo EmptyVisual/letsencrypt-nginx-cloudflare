@@ -1,95 +1,134 @@
-Let's Encrypt renewal for Lighttpd
-==================================
+# Let's Encrypt renewal for Cloudflare & NGINX
 
-This script automatize the renewal process for certificates issued by Let's Encrypt.
+This script automates the renewal process for certificates issued by Let's Encrypt.
 
+## Prequisites
 
-# Setup Let's Encrypt on Lighttpd (for the first time)
+* NGINX
+* Certbot
+* Certbot DNS Cloudfare plugin
+  * Arch - certbot-dns-cloudflare
+  * Ubuntu/Fedora/openSUSE - python3-certbot-dns-cloudflare
+
+## Setup Cloudflare configuration
+
+Create a new config file
+
+```bash
+cd ~/
+mkdir .secrets/
+nano .secrets/cloudflare.ini
+```
+
+Use the following configuration
+
+```conf
+dns_cloudflare_email = "user@domain.tld"
+dns_cloudflare_api_key = "Global API Key"
+```
+
+> Obtain your Global API key here: <https://dash.cloudflare.com/profile/api-tokens>
+
+Once this is complete, create your SSL cert directory. Run as root:
+
+```bash
+mkdir -pv /etc/nginx/ssl/cloudflare/
+```
+
+## Setup Let's Encrypt on NGINX (for the first time)
 
 Long story short, run as root:
 
 ```bash
-certbot certonly --manual
+certbot certonly --dns-cloudflare --dns-cloudflare-credentials /home/user/.secrets/cloudfare.ini
 ```
 
 Follow the steps required for every domain (and subdomain) and then for every domain do:
 
+This will create several files
+as described in the generated /etc/letsencrypt/live/yourdomain/README
+
+* `privkey.pem`  : the private key for your certificate.
+* `fullchain.pem`: the certificate file used in most server software.
+* `chain.pem`    : used for OCSP stapling in Nginx >=1.3.7.
+* `cert.pem`     : will break many server configurations, and should not be used without reading further documentation (see link below).
+
+Run as root
+
 ```bash
 cd /etc/letsencrypt/live/yourdomain
-cat privkey.pem cert.pem > ssl.pem
+cp * /etc/nginx/ssl/cloudflare
 ```
-
-My lighttpd configuration follows the following convention:
-
-> put every certificate in /etc/lighttpd using the domainname.pem syntax to distinguish them
 
 Every virtual hosts have its own folder in my home.
 
-Therefore, for every virtual host (and for every certificate) my lighttpd.conf looks like
+Therefore, for every virtual host (and for every certificate) my nginx.conf looks like
 
 ```conf
-    $SERVER["socket"] == ":443" {
-        protocol     = "https://"
-        ssl.engine   = "enable"
+server {
+    listen 443 ssl http2;
+    server_name domain.tld www.domain.tld;
+    # access_log /var/log/nginx/nginx.domain.tld.access.log;
+    # error_log /var/log/nginx/nginx.domain.tld.error.log;
 
-        ssl.ca-file = "/etc/lighttpd/fullchain.pem"
-        ssl.pemfile = "/etc/lighttpd/www.nerdz.eu.pem"
-	
-	setenv.add-environment = (
-        "HTTPS" => "on"
-        )
-        setenv.add-response-header  = (
-        "Strict-Transport-Security" => "max-age=15768000;"
-        )
-        #
-        # Mitigate BEAST attack:
-        #
-        # A stricter base cipher suite. For details see:
-        # http://blog.ivanristic.com/2011/10/mitigating-the-beast-attack-on-tls.html
-        #
-        ssl.cipher-list = "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256"
+    location / {
+        root   /var/www/html/domain.tld;
+        index  index.html;
+        }
 
-        #
-        # Make the server prefer the order of the server side cipher suite instead of the client suite.
-        # This is necessary to mitigate the BEAST attack (unless you disable all non RC4 algorithms).
-        # This option is enabled by default, but only used if ssl.cipher-list is set.
-        #
-        ssl.honor-cipher-order = "enable"
-        #
-        # Mitigate CVE-2009-3555 by disabling client triggered renegotation
-        # This is enabled by default.
-        #
-        ssl.disable-client-renegotiation = "enable"
-	ssl.ec-curve              = "secp384r1"
-	ssl.use-compression     = "disable"
-        #
-        # Disable SSLv2 because is insecure
-        ssl.use-sslv2= "disable"
-        #
-        # Disable SSLv3 (can break compatibility with some old browser) /cares
-        ssl.use-sslv3 = "disable"
-    }
+    # certs sent to the client in SERVER HELLO are concatenated in ssl_certificate
+    ssl_certificate /etc/nginx/ssl/cloudflare/domain.tld.crt;
+    ssl_certificate_key /etc/nginx/ssl/cloudflare/domain.tld.key;
+    ssl_session_timeout 1d;
+    #ssl_session_cache shared:MozSSL:10m;  # about 40000 sessions
+    ssl_session_tickets off;
+
+    # curl https://ssl-config.mozilla.org/ffdhe2048.txt > /path/to/dhparam.pem
+    # ssl_dhparam /path/to/dhparam.pem;
+
+    # intermediate configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+
+    # HSTS (ngx_http_headers_module is required) (63072000 seconds)
+    add_header Strict-Transport-Security "max-age=63072000" always;
+
+    # OCSP stapling
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
+    # verify chain of trust of OCSP response using Root CA and Intermediate certs
+    # Optionally, this will be for the Cloudflare Origin CA root certificate
+    # Obtained: https://support.cloudflare.com/hc/en-us/articles/115000479507#h_30cc332c-8f6e-42d8-9c59-6c1f06650639 (step 4)
+    ssl_trusted_certificate /etc/nginx/ssl/cloudflare/cloudflare_origin_rsa.pem;
+
+    # replace with the IP address of your resolver
+    resolver 127.0.0.1;
+}
+
 ```
 
-Where `www.nerdz.eu` is the domain.
+> Additionally, you can use <https://ssl-config.mozilla.org/> to generate your config for other servers
+
+Where `www.domain.tld` is the domain.
 There's another configuration for the document root, that differs from the one above for the line:
 
 ```conf
-ssl.pemfile = "/etc/lighttpd/nerdz.eu.pem"
+ssl.pemfile = "/etc/nginx/ssl/"
 ```
 
-# Monthly renew, using webroot
+## Monthly renew, using webroot
 
 You have to change the first lines of `renew.sh` according to your configuration.
 
-You have to change the path of this script in the `letsencrypt-lighttpd.service` file according to your configuration.
+You have to change the path of this script in the `letsencrypt-cloudflare.service` file according to your configuration.
 
 After that, you can activate the montly renew:
 
 ```bash
-cp letsencrypt-lighttpd.* /etc/systemd/system/
-systemctl enable letsencrypt-lighttpd.timer
+cp letsencrypt-cloudflare.* /etc/systemd/system/
+systemctl enable letsencrypt-cloudflare.timer
 ```
 
 That's all.
-
