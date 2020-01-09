@@ -9,6 +9,8 @@ This script automates the renewal process for certificates issued by Let's Encry
 * Certbot DNS Cloudfare plugin
   * Arch - certbot-dns-cloudflare
   * Ubuntu/Fedora/openSUSE - python3-certbot-dns-cloudflare
+  
+Please familiarise yourself with <https://certbot-dns-cloudflare.readthedocs.io/en/stable/> before continuing. The ini configuration is below.
 
 ## Setup Cloudflare configuration
 
